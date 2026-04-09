@@ -11,6 +11,7 @@ services:
     - AGGREGATION_PREFIX=aggregation
     - ID=0
     - MOM_HOST=rabbitmq
+    - MOM_PORT=5672
     - OUTPUT_QUEUE=join_queue
     - SUM_AMOUNT=3
     - SUM_PREFIX=sum
@@ -77,6 +78,7 @@ services:
     environment:
     - INPUT_QUEUE=results_queue
     - MOM_HOST=rabbitmq
+    - MOM_PORT=5672
     - OUTPUT_QUEUE=input_queue
     - SERVER_HOST=gateway
     - SERVER_PORT=5678
@@ -92,6 +94,7 @@ services:
     - AGGREGATION_PREFIX=aggregation
     - INPUT_QUEUE=join_queue
     - MOM_HOST=rabbitmq
+    - MOM_PORT=5672
     - OUTPUT_QUEUE=results_queue
     - SUM_AMOUNT=3
     - SUM_PREFIX=sum
@@ -125,6 +128,7 @@ services:
     - ID=0
     - INPUT_QUEUE=input_queue
     - MOM_HOST=rabbitmq
+    - MOM_PORT=5672
     - SUM_AMOUNT=3
     - SUM_PREFIX=sum
   sum_1:
@@ -140,6 +144,7 @@ services:
     - ID=1
     - INPUT_QUEUE=input_queue
     - MOM_HOST=rabbitmq
+    - MOM_PORT=5672
     - SUM_AMOUNT=3
     - SUM_PREFIX=sum
   sum_2:
@@ -155,5 +160,6 @@ services:
     - ID=2
     - INPUT_QUEUE=input_queue
     - MOM_HOST=rabbitmq
+    - MOM_PORT=5672
     - SUM_AMOUNT=3
     - SUM_PREFIX=sum

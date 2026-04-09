@@ -62,6 +62,7 @@ services:
     - AGGREGATION_PREFIX=ckcariaxuf
     - ID=0
     - MOM_HOST=szgpulnqog
+    - MOM_PORT=5672
     - OUTPUT_QUEUE=bqdchp
     - SUM_AMOUNT=3
     - SUM_PREFIX=eqtatg
@@ -78,6 +79,7 @@ services:
     - AGGREGATION_PREFIX=ckcariaxuf
     - ID=1
     - MOM_HOST=szgpulnqog
+    - MOM_PORT=5672
     - OUTPUT_QUEUE=bqdchp
     - SUM_AMOUNT=3
     - SUM_PREFIX=eqtatg
@@ -94,6 +96,7 @@ services:
     - AGGREGATION_PREFIX=ckcariaxuf
     - ID=2
     - MOM_HOST=szgpulnqog
+    - MOM_PORT=5672
     - OUTPUT_QUEUE=bqdchp
     - SUM_AMOUNT=3
     - SUM_PREFIX=eqtatg
@@ -113,6 +116,7 @@ services:
     - ID=0
     - INPUT_QUEUE=vxwdcotugj
     - MOM_HOST=szgpulnqog
+    - MOM_PORT=5672
     - SUM_AMOUNT=3
     - SUM_PREFIX=eqtatg
   eqtatg_1:
@@ -130,6 +134,7 @@ services:
     - ID=1
     - INPUT_QUEUE=vxwdcotugj
     - MOM_HOST=szgpulnqog
+    - MOM_PORT=5672
     - SUM_AMOUNT=3
     - SUM_PREFIX=eqtatg
   eqtatg_2:
@@ -147,6 +152,7 @@ services:
     - ID=2
     - INPUT_QUEUE=vxwdcotugj
     - MOM_HOST=szgpulnqog
+    - MOM_PORT=5672
     - SUM_AMOUNT=3
     - SUM_PREFIX=eqtatg
   oxnflfxovn:
@@ -161,6 +167,7 @@ services:
     - AGGREGATION_PREFIX=ckcariaxuf
     - INPUT_QUEUE=bqdchp
     - MOM_HOST=szgpulnqog
+    - MOM_PORT=5672
     - OUTPUT_QUEUE=zqjpgke
     - SUM_AMOUNT=3
     - SUM_PREFIX=eqtatg
@@ -192,6 +199,7 @@ services:
     environment:
     - INPUT_QUEUE=zqjpgke
     - MOM_HOST=szgpulnqog
+    - MOM_PORT=5672
     - OUTPUT_QUEUE=vxwdcotugj
     - SERVER_HOST=uoipzt
     - SERVER_PORT=5678
