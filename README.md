@@ -213,6 +213,31 @@ En la carpeta `python`:
 - `make test`
 - `make down`
 
+### Selección de escenarios de test
+
+En la carpeta `python`, para cambiar entre escenarios del 1 al 5:
+
+- `make switch`
+
+Luego ejecutar:
+
+- `make test`
+
+También puede hacerse sin interacción:
+
+- `echo 3 | make switch && make test`
+
+### Archivos generados y limpieza
+
+La ejecución de tests genera archivos en `python/output/` y bytecode/caches de Python.
+
+Estos artefactos quedaron excluidos del versionado vía `.gitignore` para evitar commits accidentales de salidas locales.
+
+Si se quiere limpiar manualmente salidas generadas:
+
+- `rm -f python/output/*.csv`
+- `find python -type d -name __pycache__ -prune -exec rm -rf {} +`
+
 ## Consideraciones finales
 
 La implementación prioriza coordinación explícita, aislamiento por cliente y escalado horizontal evitando broadcast de datos. El comportamiento se mantiene compatible con variaciones de `SUM_AMOUNT`, `AGGREGATION_AMOUNT`, datasets y escenarios de despliegue, que son los ejes de evaluación del trabajo práctico.
