@@ -1,6 +1,7 @@
 import os
 import logging
 import bisect
+import signal
 
 from common import middleware, message_protocol, fruit_item
 
@@ -23,47 +24,74 @@ class AggregationFilter:
         self.output_queue = middleware.MessageMiddlewareQueueRabbitMQ(
             MOM_HOST, OUTPUT_QUEUE
         )
-        self.fruit_top = []
+        self.fruit_top_by_client = {}
+        self.sum_eof_by_client = {}
+        self.is_shutting_down = False
 
-    def _process_data(self, fruit, amount):
-        logging.info("Processing data message")
-        for i in range(len(self.fruit_top)):
-            if self.fruit_top[i].fruit == fruit:
-                self.fruit_top[i] = self.fruit_top[i] + fruit_item.FruitItem(
+    def _process_data(self, client_id, fruit, amount):
+        fruit_top = self.fruit_top_by_client.setdefault(client_id, [])
+        for i in range(len(fruit_top)):
+            if fruit_top[i].fruit == fruit:
+                fruit_top[i] = fruit_top[i] + fruit_item.FruitItem(
                     fruit, amount
                 )
                 return
-        bisect.insort(self.fruit_top, fruit_item.FruitItem(fruit, amount))
+        bisect.insort(fruit_top, fruit_item.FruitItem(fruit, amount))
 
-    def _process_eof(self):
-        logging.info("Received EOF")
-        fruit_chunk = list(self.fruit_top[-TOP_SIZE:])
+    def _process_eof(self, client_id, sum_id):
+        eof_sums = self.sum_eof_by_client.setdefault(client_id, set())
+        eof_sums.add(sum_id)
+        if len(eof_sums) < SUM_AMOUNT:
+            return
+
+        fruit_top = self.fruit_top_by_client.get(client_id, [])
+        fruit_chunk = list(fruit_top[-TOP_SIZE:])
         fruit_chunk.reverse()
-        fruit_top = list(
+        top = list(
             map(
                 lambda fruit_item: (fruit_item.fruit, fruit_item.amount),
                 fruit_chunk,
             )
         )
-        self.output_queue.send(message_protocol.internal.serialize(fruit_top))
-        del self.fruit_top
+        partial_result = message_protocol.internal.PartialResultMessage(client_id, ID, top)
+        self.output_queue.send(message_protocol.internal.serialize(partial_result.to_dict()))
+        self.fruit_top_by_client.pop(client_id, None)
+        self.sum_eof_by_client.pop(client_id, None)
 
     def process_messsage(self, message, ack, nack):
-        logging.info("Process message")
         fields = message_protocol.internal.deserialize(message)
-        if len(fields) == 2:
-            self._process_data(*fields)
-        else:
-            self._process_eof()
+        msg = message_protocol.internal.parse_message(fields)
+        if msg.message_type == message_protocol.internal.InternalMessageType.DATA:
+            self._process_data(msg.client_id, msg.fruit, msg.amount)
+        elif msg.message_type == message_protocol.internal.InternalMessageType.AGG_EOF_BARRIER:
+            self._process_eof(msg.client_id, msg.sum_id)
         ack()
 
     def start(self):
         self.input_exchange.start_consuming(self.process_messsage)
 
+    def shutdown(self):
+        if self.is_shutting_down:
+            return
+        self.is_shutting_down = True
+        try:
+            self.input_exchange.stop_consuming()
+        except Exception:
+            pass
+        try:
+            self.input_exchange.close()
+        except Exception:
+            pass
+        try:
+            self.output_queue.close()
+        except Exception:
+            pass
+
 
 def main():
     logging.basicConfig(level=logging.INFO)
     aggregation_filter = AggregationFilter()
+    signal.signal(signal.SIGTERM, lambda signum, frame: aggregation_filter.shutdown())
     aggregation_filter.start()
     return 0
 

@@ -1,81 +1,218 @@
-# Trabajo Práctico - Coordinación
+# Trabajo Práctico - Coordinación (Implementación Python)
 
-En este trabajo se busca familiarizar a los estudiantes con los desafíos de la coordinación del trabajo y el control de la complejidad en sistemas distribuidos. Para tal fin se provee un esqueleto de un sistema de control de stock de una verdulería y un conjunto de escenarios de creciente grado de complejidad y distribución que demandarán mayor sofisticación en la comunicación de las partes involucradas.
+## Resumen
 
-## Ejecución
+Se implementó una solución distribuida en Python para resolver consultas concurrentes de múltiples clientes sobre datos de frutas, escalando en cantidad de instancias de Sum y Aggregation sin depender de un número fijo de contenedores.
 
-`make up` : Inicia los contenedores del sistema y comienza a seguir los logs de todos ellos en un solo flujo de salida.
+La solución preserva el protocolo externo y la opacidad de `FruitItem`, y reemplaza la coordinación interna por un protocolo explícito con mensajes tipados y barreras por cliente.
 
-`make down`:   Detiene los contenedores y libera los recursos asociados.
+## Objetivos que resuelve
 
-`make logs`: Sigue los logs de todos los contenedores en un solo flujo de salida.
+- Soportar múltiples clientes concurrentes sin mezclar resultados.
+- Coordinar correctamente múltiples instancias de Sum frente a EOF por cliente.
+- Coordinar correctamente múltiples instancias de Aggregation para emitir un parcial consistente por cliente.
+- Consolidar parciales en Join y emitir un único resultado final por cliente.
+- Escalar procesamiento evitando broadcast redundante entre Sum y Aggregation.
+- Implementar middleware RabbitMQ funcional con ACK/NACK manual y mensajes persistentes.
+- Implementar cierre graceful por SIGTERM en Sum, Aggregation y Join.
 
-`make test`: Inicia los contenedores del sistema, espera a que los clientes finalicen, compara los resultados con una ejecución serial y detiene los contenederes.
+## Arquitectura de alto nivel
 
-`make switch`: Permite alternar rápidamente entre los archivos de docker compose de los distintos escenarios provistos.
+Flujo principal:
 
-## Elementos del sistema objetivo
+1. Client envía registros al Gateway por TCP.
+2. Gateway serializa cada registro como `DATA(client_id, fruit, amount)`.
+3. Gateway serializa fin de cliente como `EOF(client_id)`.
+4. Sum recibe mensajes, acumula por cliente y fruta.
+5. Sum publica barrera de cierre por cliente en `SUM_CONTROL_EXCHANGE`.
+6. Cada Sum, al recibir barrera, flushea el cliente:
+   - envía datos a una única instancia de Aggregation según hash estable;
+   - envía `AGG_EOF_BARRIER(client_id, sum_id)` a todas las instancias de Aggregation.
+7. Cada Aggregation acumula por cliente y emite parcial cuando recibió barrera de todos los Sum.
+8. Join recibe parciales, mergea por cliente, y cuando junta `AGGREGATION_AMOUNT` parciales emite `RESULT(client_id, fruit_top)`.
+9. Gateway entrega al socket correcto filtrando por `client_id`.
 
-![ ](./imgs/diagrama_de_robustez.jpg  "Diagrama de Robustez")
-*Fig. 1: Diagrama de Robustez*
+## Decisiones de diseño y justificación
 
-### Client
+### 1) Correlación por cliente con `client_id`
 
-Lee un archivo de entrada y envía por TCP/IP pares (fruta, cantidad) al sistema.
-Cuando finaliza el envío de datos, aguarda un top de pares (fruta, cantidad) y vuelca el resultado en un archivo de salida csv.
-El criterio y tamaño del top dependen de la configuración del sistema. Por defecto se trata de un top 3 de frutas de acuerdo a la cantidad total almacenada.
+Se agregó `client_id` único por conexión en Gateway.
+
+Motivo:
+
+- Sin correlación explícita, en concurrencia es posible entregar el resultado de un cliente a otro.
+- Con `client_id`, todos los mensajes internos quedan asociados a una consulta concreta.
+
+Impacto:
+
+- Aislamiento entre consultas concurrentes.
+- Matching determinístico en la salida hacia Gateway.
+
+### 2) Protocolo interno tipado
+
+Se definieron tipos de mensaje internos:
+
+- `DATA`
+- `EOF`
+- `SUM_EOF_BARRIER`
+- `AGG_EOF_BARRIER`
+- `PARTIAL_RESULT`
+- `RESULT`
+
+Motivo:
+
+- Evita lógica implícita basada en longitud de listas.
+- Mejora validación, evolución y trazabilidad.
+
+Impacto:
+
+- Menos ambigüedad en parsing.
+- Flujo más robusto ante errores de formato.
+
+### 3) Barrera de EOF por cliente entre Sum y Aggregation
+
+Se implementó una coordinación por cliente en dos niveles:
+
+- Barrera de Sum: `SUM_EOF_BARRIER(client_id)`
+- Barrera de Aggregation: `AGG_EOF_BARRIER(client_id, sum_id)`
+
+Motivo:
+
+- En una cola compartida, el EOF de cliente puede llegar primero a una sola instancia de Sum.
+- Sin barrera, una instancia podría cerrar temprano y generar resultados truncados.
+
+Impacto:
+
+- Todas las instancias participan del cierre de cada cliente.
+- Aggregation recién emite parcial cuando conoce fin global de Sum para ese cliente.
+
+### 4) Particionado determinístico Sum -> Aggregation
+
+Cada fruta se enruta a un único Aggregation con hash estable:
+
+`aggregation_id = hash_sha256(client_id + "|" + fruit) % AGGREGATION_AMOUNT`
+
+Motivo:
+
+- Evitar broadcast de cada fruta a todas las instancias.
+- Reducir costo de CPU y ancho de banda interno.
+
+Impacto:
+
+- Escalabilidad horizontal real.
+- Menor duplicación de trabajo.
+
+### 5) Consolidación final en Join
+
+Join recibe `PARTIAL_RESULT(client_id, aggregation_id, fruit_top)` y mantiene estado por cliente hasta recibir `AGGREGATION_AMOUNT` parciales únicos.
+
+Motivo:
+
+- Con múltiples Aggregation, no existe un único parcial final hasta combinar todos.
+
+Impacto:
+
+- Un solo `RESULT` por cliente.
+- Top final correcto con cualquier multiplicidad de Aggregation.
+
+### 6) Middleware RabbitMQ robusto
+
+Se implementaron colas y exchanges con:
+
+- declaraciones durables;
+- mensajes persistentes;
+- consumo manual con ACK/NACK;
+- mapeo de excepciones de conexión y de mensajería;
+- cierre de recursos por conexión.
+
+Motivo:
+
+- El esqueleto no implementaba middleware.
+
+Impacto:
+
+- Base funcional para escenarios de coordinación distribuidos.
+
+### 7) Cierre graceful por SIGTERM
+
+Se agregó manejo de SIGTERM en Sum, Aggregation y Join para detener consumo y cerrar conexiones sin finalizar abruptamente.
+
+Motivo:
+
+- Requisito de robustez operativa en sistemas distribuidos.
+
+Impacto:
+
+- Menor riesgo de corrupción de estado en apagados.
+
+## Estado por componente
 
 ### Gateway
 
-Es el punto de entrada y salida del sistema. Intercambia mensajes con los clientes y las colas internas utilizando distintos protocolos.
+- Mantiene protocolo externo original.
+- `message_handler` genera `client_id` por conexión.
+- Serializa `DATA` y `EOF` internos.
+- Filtra `RESULT` por `client_id` antes de responder al socket.
 
 ### Sum
- 
-Recibe pares  (fruta, cantidad) y aplica la función Suma de la clase `FruitItem`. Por defecto esa suma es la canónica para los números enteros, ej:
 
-`("manzana", 5) + ("manzana", 8) = ("manzana", 13)`
+- Acumula por `client_id` y fruta usando `FruitItem`.
+- Publica barrera de cierre por cliente.
+- Flushea estado del cliente hacia Aggregation usando hash estable.
+- Emite barrera de fin para Aggregation con su `sum_id`.
 
-Pero su implementación podría modificarse.
-Cuando se detecta el final de la ingesta de datos envía los pares (fruta, cantidad) totales a los Aggregators.
+### Aggregation
 
-### Aggregator
+- Acumula por cliente.
+- Cuenta barreras recibidas por `sum_id`.
+- Emite parcial al Join cuando recibió `SUM_AMOUNT` barreras del cliente.
 
-Consolida los datos de las distintas instancias de Sum.
-Cuando se detecta el final de la ingesta, se calcula un top parcial y se envía esa información al Joiner.
+### Join
 
-### Joiner
+- Mergea parciales por cliente.
+- Espera `AGGREGATION_AMOUNT` parciales únicos por cliente.
+- Emite resultado final al Gateway.
 
-Recibe tops parciales de las instancias del Aggregator.
-Cuando se detecta el final de la ingesta, se envía el top final hacia el gateway para ser entregado al cliente.
+## Escalabilidad
 
-## Limitaciones del esqueleto provisto
+### Escalado en clientes
 
-La implementación base respeta la división de responsabilidades de los distintos controles y hace uso de la clase `FruitItem` como un elemento opaco, sin asumir la implementación de las funciones de Suma y Comparación.
+La correlación por `client_id` permite procesar clientes concurrentes en el mismo pipeline sin mezclar mensajes ni respuestas.
 
-No obstante, esta implementación no cubre los objetivos buscados tal y como es presentada. Entre sus falencias puede destactarse que:
+### Escalado en Sum
 
- - No se implementa la interfaz del middleware. 
- - No se dividen los flujos de datos de los clientes más allá del Gateway, por lo que no se es capaz de resolver múltiples consultas concurrentemente.
- - No se implementan mecanismos de sincronización que permitan escalar los controles Sum y Aggregator. En particular:
-   - Las instancias de Sum se dividen el trabajo, pero solo una de ellas recibe la notificación de finalización en la ingesta de datos.
-   - Las instancias de Sum realizan _broadcast_ a todas las instancias de Aggregator, en lugar de agrupar los datos por algún criterio y evitar procesamiento redundante.
-  - No se maneja la señal SIGTERM, con la salvedad de los clientes y el Gateway.
+Cada instancia consume de la cola de entrada y participa en barrera por cliente. El cierre no depende de una única instancia.
 
-## Condiciones de Entrega
+### Escalado en Aggregation
 
-El código de este repositorio se agrupa en dos carpetas, una para Python y otra para Golang. Los estudiantes deberán elegir **sólo uno** de estos lenguajes y realizar una implementación que funcione correctamente ante cambios en la multiplicidad de los controles (archivo de docker compose), los archivos de entrada y las implementaciones de las funciones de Suma y Comparación del `FruitItem`.
+El particionado determinístico distribuye carga entre instancias. Join recompone el resultado final independientemente de la multiplicidad.
 
-![ ](./imgs/mutabilidad.jpg  "Mutabilidad de Elementos")
-*Fig. 2: Elementos mutables e inmutables*
+## Correctitud de resultados
 
-A modo de referencia, en la *Figura 2* se marcan en tonos oscuros los elementos que los estudiantes no deben alterar y en tonos claros aquellos sobre los que tienen libertad de decisión.
-Al momento de la evaluación y ejecución de las pruebas se **descartarán** o **reemplazarán** :
+La solución protege dos invariantes:
 
-- Los archivos de entrada de la carpeta `datasets`.
-- El archivo docker compose principal y los de la carpeta `scenarios`.
-- Todos los archivos Dockerfile.
-- Todo el código del cliente.
-- Todo el código del gateway, salvo `message_handler`.
-- La implementación del protocolo de comunicación externo y `FruitItem`.
+1. Cada cliente recibe exactamente un resultado final asociado a su `client_id`.
+2. Cada resultado final se emite tras completar la coordinación de cierre de todas las instancias relevantes.
 
-Redactar un breve informe explicando el modo en que se coordinan las instancias de Sum y Aggregation, así como el modo en el que el sistema escala respecto a los clientes y a la cantidad de controles.
+## Archivos modificados
+
+- `python/src/common/message_protocol/internal.py`
+- `python/src/common/message_protocol/internal_messages.py`
+- `python/src/common/middleware/middleware_rabbitmq.py`
+- `python/src/gateway/message_handler/message_handler.py`
+- `python/src/sum/main.py`
+- `python/src/aggregation/main.py`
+- `python/src/join/main.py`
+
+## Ejecución
+
+En la carpeta `python`:
+
+- `make up`
+- `make logs`
+- `make test`
+- `make down`
+
+## Consideraciones finales
+
+La implementación prioriza coordinación explícita, aislamiento por cliente y escalado horizontal evitando broadcast de datos. El comportamiento se mantiene compatible con variaciones de `SUM_AMOUNT`, `AGGREGATION_AMOUNT`, datasets y escenarios de despliegue, que son los ejes de evaluación del trabajo práctico.
