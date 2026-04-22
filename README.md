@@ -90,12 +90,13 @@ Impacto:
 
 Cada fruta se enruta a un único Aggregation con hash estable:
 
-`aggregation_id = hash_sha256(client_id + "|" + fruit) % AGGREGATION_AMOUNT`
+`aggregation_id = crc32(client_id + "|" + fruit) % AGGREGATION_AMOUNT`
 
 Motivo:
 
 - Evitar broadcast de cada fruta a todas las instancias.
 - Reducir costo de CPU y ancho de banda interno.
+
 
 Impacto:
 
@@ -144,6 +145,35 @@ Motivo:
 Impacto:
 
 - Menor riesgo de corrupción de estado en apagados.
+
+### 8) Paralelismo y GIL (hilos vs procesos)
+
+Decisión:
+
+- Se usa paralelismo por procesos en Gateway para atender múltiples clientes y el consumidor de resultados en paralelo.
+- En los workers (Sum/Aggregation/Join) se usa consumo bloqueante de RabbitMQ en un loop por proceso.
+
+Justificación respecto al GIL:
+
+- La mayor parte del tiempo de ejecución está en I/O de red (socket/TCP y RabbitMQ), no en CPU-bound intensivo.
+- En tareas I/O-bound, el impacto del GIL es acotado y no bloquea el avance global del pipeline distribuido.
+- El uso de procesos en Gateway evita compartir GIL entre handlers concurrentes del mismo contenedor cuando hay múltiples clientes.
+
+### 9) Alcance de fallas y supuesto de comunicación estable
+
+Supuesto operativo:
+
+- Se asume que la comunicación es estable durante la ejecución punta a punta.
+
+Alcance implementado para manejo de errores:
+
+- Se contempla manejo de errores de conexión y de intercambio de mensajes (socket/RabbitMQ), con liberación de recursos y finalización del proceso cuando corresponde.
+- No se implementa tolerancia a fallas dentro del algoritmo de coordinación (por ejemplo, reconfiguración o continuidad del cálculo tras caída de nodos en medio del protocolo de barreras).
+
+Justificación:
+
+- El foco del trabajo es la coordinación y el paralelismo multicómputo bajo funcionamiento normal.
+- Ante desconexiones no previstas por enunciado, el comportamiento aceptado es dejar de responder de forma controlada, cerrar recursos y terminar ejecución.
 
 ## Estado por componente
 

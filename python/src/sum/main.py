@@ -1,7 +1,7 @@
 import os
 import logging
 import signal
-import hashlib
+import zlib
 
 from common import middleware, message_protocol, fruit_item
 
@@ -37,8 +37,7 @@ class SumFilter:
 
     def _get_aggregation_id(self, client_id, fruit):
         key = f"{client_id}|{fruit}".encode("utf-8")
-        digest = hashlib.sha256(key).digest()
-        return int.from_bytes(digest[:8], byteorder="big") % AGGREGATION_AMOUNT
+        return zlib.crc32(key) % AGGREGATION_AMOUNT
 
     def _process_data(self, client_id, fruit, amount):
         if client_id in self.flushed_clients:
